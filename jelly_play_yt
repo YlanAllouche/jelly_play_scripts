@@ -1,0 +1,118 @@
+#!/bin/bash
+
+# Jellyfin server URL and credentials
+SERVER_URL="${JELLYFIN_SERVER_URL}"
+USERNAME="${JELLYFIN_USERNAME}"
+PASSWORD="${JELLYFIN_PASSWORD}"
+
+# Function to authenticate and get access token
+get_access_token() {
+  local auth_response=$(curl -s -X POST "$SERVER_URL/Users/AuthenticateByName" \
+    -H "Content-Type: application/json" \
+    -H "X-Emby-Authorization: MediaBrowser Client=\"BashCast\", Device=\"Bash\", DeviceId=\"BashCastDevice\", Version=\"1.0.0\"" \
+    -d "{\"Username\":\"$USERNAME\",\"Pw\":\"$PASSWORD\"}")
+  
+  echo "$auth_response" | grep -o '"AccessToken":"[^"]*"' | cut -d'"' -f4
+}
+
+# Function to get session ID for the device
+get_session_id() {
+  local access_token=$1
+  local device_id=$2
+  
+  local sessions_response=$(curl -s -X GET "$SERVER_URL/Sessions" \
+    -H "X-Emby-Token: $access_token")
+  
+  echo "$sessions_response" | jq -r --arg device_id "$device_id" '.[] | select(.DeviceId == $device_id) | .Id'
+}
+
+# Function to find a video by YouTube ID
+find_video_by_youtube_id() {
+  local access_token=$1
+  local youtube_id=$2
+  
+  # Get videos and filter for the YouTube ID (first check provider IDs, then paths)
+  local items_response=$(curl -s -X GET "$SERVER_URL/Items?Recursive=true&Fields=ProviderIds,Path&MediaTypes=Video&Limit=1000000"  -H "X-Emby-Token: $access_token")
+
+
+  # First try to find by provider ID
+  # echo $items_response  >&2
+  # echo $access_token >&2
+
+  local media_id=$(echo "$items_response" | jq -r --arg ytid "$youtube_id" \
+    '.Items[] | select(.ProviderIds.youtube == $ytid) | .Id' | head -1)
+  # If not found by provider ID, try by path
+  if [ -z "$media_id" ]; then
+    media_id=$(echo "$items_response" | jq -r --arg ytid "$youtube_id" \
+      '.Items[] | select(.Path | contains($ytid)) | .Id' | head -1)
+  fi
+  
+  echo "$media_id"
+}
+
+# Function to play a video
+play_video() {
+  local access_token=$1
+  local session_id=$2
+  local media_id=$3
+  
+  curl -s -X POST "$SERVER_URL/Sessions/$session_id/Playing?playCommand=PlayNow&itemIds=$media_id" \
+    -H "X-Emby-Token: $access_token" \
+    -H "accept: */*" \
+    -d ''
+}
+
+# Main function
+main() {
+  # Check if YouTube ID was provided
+  if [ $# -lt 1 ]; then
+    echo "Usage: $0 <youtube_id>"
+    exit 1
+  fi
+  
+  YOUTUBE_ID=$1
+  
+  # Authenticate
+  echo "Authenticating with Jellyfin..."
+  ACCESS_TOKEN=$(get_access_token)
+  
+  if [ -z "$ACCESS_TOKEN" ]; then
+    echo "Authentication failed. Please check your credentials."
+    exit 1
+  fi
+  
+  echo "Authentication successful!"
+  
+  # Get device ID and session ID
+  DEVICE_ID=$(cat ~/.config/jellyfin-mpv-shim/conf.json | jq -r .client_uuid)
+  echo "Device ID: $DEVICE_ID"
+  
+  SESSION_ID=$(get_session_id "$ACCESS_TOKEN" "$DEVICE_ID")
+  
+  if [ -z "$SESSION_ID" ]; then
+    echo "Could not find session ID for device. Using device ID as session ID."
+    SESSION_ID="$DEVICE_ID"
+  else
+    echo "Session ID: $SESSION_ID"
+  fi
+  
+  # Find the video by YouTube ID
+  echo "Searching for video with YouTube ID: $YOUTUBE_ID"
+  MEDIA_ID=$(find_video_by_youtube_id "$ACCESS_TOKEN" "$YOUTUBE_ID")
+  
+  if [ -z "$MEDIA_ID" ]; then
+    echo "Could not find video with YouTube ID: $YOUTUBE_ID"
+    notify-send "Jellyfin: Could not find video" "YouTube ID: $YOUTUBE_ID"
+    exit 1
+  fi
+  
+  echo "Found video with media ID: $MEDIA_ID"
+  
+  # Play the video
+  echo "Playing video..."
+  play_video "$ACCESS_TOKEN" "$SESSION_ID" "$MEDIA_ID"
+  
+  echo "Play command sent successfully!"
+}
+
+main "$@"
