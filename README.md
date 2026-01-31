@@ -64,6 +64,11 @@ Syncs a playlist from a JSON file into an existing Jellyfin playlist.
 
 This script is particularly useful for syncing materialized dataview queries (e.g., from Obsidian) directly into Jellyfin playlists. It reuses the existing mpv-shim configuration (`~/.config/jellyfin-mpv-shim/cred.json`) to authenticate, completely skipping the need for explicit username/password authentication.
 
+### jelly_play.lua
+
+Simple lua script for neovim that retrieves the note's ID if and pases it to themain script.  
+Going into a markdown note created and cached by `CaptureMd`, we can immediately play the video in the local jellyfin-mpv-shim bypressing `<leader>bp`
+
 ## Future Improvements
 
 ### Caching Strategy
